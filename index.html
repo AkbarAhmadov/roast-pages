@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Roast Pages — page-by-page comedy stories</title>
+  <meta name="description" content="Create interactive, page-by-page comedy and roast stories with surprise image reveals." />
+
+  <!-- Tailwind CSS (CDN build) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: { brand: { 300: '#fcd34d', 400: '#fbbf24', 500: '#f59e0b', 600: '#d97706' } },
+          keyframes: {
+            'fade-up': { '0%': { opacity: 0, transform: 'translateY(12px) scale(.98)' }, '100%': { opacity: 1, transform: 'translateY(0) scale(1)' } },
+            'reveal':  { '0%': { opacity: 0, filter: 'blur(16px)', transform: 'scale(1.05)' }, '100%': { opacity: 1, filter: 'blur(0)', transform: 'scale(1)' } },
+            'pop':     { '0%': { transform: 'scale(1)' }, '40%': { transform: 'scale(1.4) rotate(-8deg)' }, '100%': { transform: 'scale(1)' } },
+          },
+          animation: {
+            'fade-up': 'fade-up .35s ease-out both',
+            'reveal': 'reveal .8s cubic-bezier(.2,.8,.2,1) both',
+            'pop': 'pop .4s ease-out',
+          },
+        },
+      },
+    };
+  </script>
+  <style type="text/tailwindcss">
+    html { color-scheme: light; }
+    body { -webkit-tap-highlight-color: transparent; }
+    .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400/70; }
+    .btn-primary { @apply btn bg-brand-400 text-zinc-950 hover:bg-brand-500; }
+    .btn-secondary { @apply btn border border-zinc-300 bg-white text-zinc-900 shadow-sm hover:bg-zinc-50; }
+    .btn-ghost { @apply btn text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900; }
+    .btn-danger { @apply btn border border-red-300 bg-red-50 text-red-700 hover:bg-red-100; }
+    .icon-btn { @apply inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-zinc-500; }
+    .input { @apply w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-zinc-900 placeholder-zinc-400 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-400/30; }
+    .pill { @apply inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700; }
+    .card { @apply rounded-2xl border border-zinc-200 bg-white shadow-md shadow-zinc-200/70; }
+    .laugh-btn { @apply inline-flex items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-3.5 py-1.5 text-sm font-semibold text-zinc-900 transition hover:border-brand-400/60 hover:bg-brand-400/15 active:scale-95; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 999px; border: 2px solid #fafafa; }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+
+  <!-- Supabase JS SDK v2 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body class="min-h-dvh bg-zinc-50 text-zinc-900 antialiased selection:bg-brand-400/40">
+  <div id="app"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root" class="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex flex-col items-center gap-2 px-4"></div>
+
+<script>
+'use strict';
+
+/* ==========================================================================================
+   1) CONFIGURATION  →  PASTE YOUR SUPABASE CREDENTIALS BETWEEN THE QUOTES BELOW
+   ------------------------------------------------------------------------------------------
+   Supabase Dashboard → Project Settings → API
+     • "Project URL"           → SUPABASE_URL        (looks like https://abcdefghijklmnop.supabase.co)
+     • "anon public" API key   → SUPABASE_ANON_KEY   (a long string; the newer "publishable" key also works)
+   The anon key is SAFE to ship in a public website: the database is protected by RLS + the
+   SQL functions in supabase-setup.sql, not by this key.
+   ========================================================================================== */
+const SUPABASE_URL      = 'https://dlcizulpioeibjnuyfji.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsY2l6dWxwaW9laWJqbnV5ZmppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2MTgxMzMsImV4cCI6MjEwOTE5NDEzM30.4A8XbfvxljWF8mKGNocUABbUCpIqyLL5_wfEN-36nRs';
+/* ========================================================================================== */
+
+const LIMITS = { PAPERS: 25, IMAGES: 5, TEXT: 150, CAPTION: 150, TITLE: 80, AUTHOR: 40, PASSWORD_MIN: 4 };
+const BUCKET = 'story-images';
+const IMAGE_MAX_DIMENSION = 1600;   // uploaded images are shrunk to this size to save free-tier storage
+const IMAGE_QUALITY = 0.82;
+
+const CONFIGURED = SUPABASE_URL.startsWith('https://') && !SUPABASE_URL.includes('PASTE') && !SUPABASE_ANON_KEY.includes('PASTE');
+const db = CONFIGURED ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
+/* ------------------------------------------------------------------ small helpers */
+const app = document.getElementById('app');
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = () => Math.random().toString(36).slice(2, 10);
+// crypto.randomUUID() only exists on secure origins (https:// or localhost). Fall back to
+// building a v4 UUID from getRandomValues so the editor also works on e.g. http://0.0.0.0:8000.
+function randomUUID() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const imageCount = (papers) => papers.filter((p) => p.type === 'image').length;
+
+function timeAgo(iso) {
+  const diff = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+  const units = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
+  for (const [unit, secs] of units) if (diff >= secs) return rtf.format(-Math.floor(diff / secs), unit);
+  return 'just now';
+}
+
+// SHA-256 via the Web Crypto API. The story id is mixed in as a salt so two stories with the
+// same password never share a hash (defeats rainbow tables). Returns a 64-char hex string.
+async function hashPassword(storyId, password) {
+  if (!crypto.subtle) throw new Error('Password hashing needs a secure page. Open the site via https:// or http://localhost (not 0.0.0.0 / a LAN IP).');
+  const bytes = new TextEncoder().encode(`${storyId}:${password}`);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function friendlyError(err) {
+  const msg = err?.message || String(err);
+  if (/Failed to fetch|NetworkError|network/i.test(msg)) return 'Network error — check your connection (or your Supabase URL).';
+  if (/JWT|apikey|Invalid API key/i.test(msg)) return 'Supabase rejected the API key. Double-check SUPABASE_ANON_KEY.';
+  if (/relation .* does not exist|function .* does not exist|Could not find the (table|function)/i.test(msg)) return 'Database not set up yet — run supabase-setup.sql in the Supabase SQL Editor.';
+  if (/Bucket not found/i.test(msg)) return `Storage bucket "${BUCKET}" not found — run the storage part of supabase-setup.sql.`;
+  if (/row-level security|violates .* policy/i.test(msg)) return 'Permission denied by the database (RLS / storage policy). Re-run supabase-setup.sql.';
+  if (/check constraint/i.test(msg)) return `The story breaks one of the limits (${LIMITS.PAPERS} papers, ${LIMITS.IMAGES} images, ${LIMITS.TEXT} characters).`;
+  return msg;
+}
+
+/* ------------------------------------------------------------------ toasts */
+function toast(message, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `pointer-events-auto animate-fade-up rounded-xl border px-4 py-3 text-sm shadow-xl backdrop-blur ${
+    type === 'error' ? 'border-red-300 bg-red-50/95 text-red-800' :
+    type === 'success' ? 'border-emerald-300 bg-emerald-50/95 text-emerald-800' :
+    'border-zinc-800 bg-zinc-900/95 text-white'}`;
+  el.textContent = message;
+  $('#toast-root').appendChild(el);
+  setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3600);
+}
+
+/* ------------------------------------------------------------------ modals */
+function openModal(innerHtml) {
+  const root = $('#modal-root');
+  root.innerHTML = `
+    <div class="fixed inset-0 z-50 flex items-end justify-center bg-zinc-900/40 p-3 backdrop-blur-sm sm:items-center sm:p-6" data-modal-backdrop>
+      <div class="card w-full max-w-md animate-fade-up p-6" role="dialog" aria-modal="true">${innerHtml}</div>
+    </div>`;
+  const backdrop = $('[data-modal-backdrop]', root);
+  backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) closeModal(); });
+  setTimeout(() => $('[autofocus]', root)?.focus(), 30);
+  return $('[role="dialog"]', root);
+}
+function closeModal() {
+  const root = $('#modal-root');
+  root.dispatchEvent(new CustomEvent('modal-close'));
+  root.innerHTML = '';
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#modal-root').children.length) closeModal(); });
+
+/** Ask for a password. Resolves to the string typed, or null if cancelled. */
+function promptPassword({ title, text, cta = 'Continue', danger = false }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+    const dialog = openModal(`
+      <h2 class="text-lg font-bold">${esc(title)}</h2>
+      <p class="mt-1 text-sm text-zinc-500">${esc(text)}</p>
+      <form class="mt-5 space-y-4" data-form>
+        <input class="input" type="password" name="password" placeholder="Secret password" autocomplete="current-password" required autofocus />
+        <p class="text-xs text-zinc-500">There is no password recovery. If it is lost, the story can never be edited or deleted.</p>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn-ghost" data-cancel>Cancel</button>
+          <button type="submit" class="${danger ? 'btn-danger' : 'btn-primary'}">${esc(cta)}</button>
+        </div>
+      </form>`);
+    $('#modal-root').addEventListener('modal-close', () => finish(null), { once: true });
+    $('[data-cancel]', dialog).addEventListener('click', closeModal);
+    $('[data-form]', dialog).addEventListener('submit', (e) => {
+      e.preventDefault();
+      const value = new FormData(e.target).get('password');
+      finish(value);
+      closeModal();
+    });
+  });
+}
+
+/** Yes/No confirmation. Resolves true/false. */
+function confirmDialog({ title, text, cta = 'Confirm', danger = false }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const dialog = openModal(`
+      <h2 class="text-lg font-bold">${esc(title)}</h2>
+      <p class="mt-1 text-sm text-zinc-500">${esc(text)}</p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" class="btn-ghost" data-cancel>Cancel</button>
+        <button type="button" class="${danger ? 'btn-danger' : 'btn-primary'}" data-ok autofocus>${esc(cta)}</button>
+      </div>`);
+    $('#modal-root').addEventListener('modal-close', () => finish(false), { once: true });
+    $('[data-cancel]', dialog).addEventListener('click', closeModal);
+    $('[data-ok]', dialog).addEventListener('click', () => { finish(true); closeModal(); });
+  });
+}
+
+/* ------------------------------------------------------------------ app state + router */
+const state = {
+  route: { name: 'feed' },
+  stories: [],
+  loaded: false,
+  loadError: null,
+  sort: localStorage.getItem('rp_sort') || 'newest',
+  editor: null,   // { id, isEdit, title, author, papers:[...], passwordHash }
+  reader: null,   // { story, index }
+};
+
+function parseHash() {
+  const [a, b] = location.hash.replace(/^#\/?/, '').split('/');
+  if (a === 'new') return { name: 'new' };
+  if (a === 'story' && b) return { name: 'story', id: b };
+  if (a === 'edit' && b) return { name: 'edit', id: b };
+  return { name: 'feed' };
+}
+
+async function onRoute() {
+  closeModal();
+  state.route = parseHash();
+  window.scrollTo(0, 0);
+  if (!CONFIGURED) return renderSetupScreen();
+  switch (state.route.name) {
+    case 'new':
+      if (!state.editor || state.editor.isEdit) startNewStory();
+      renderEditor();
+      break;
+    case 'story':
+      await openReader(state.route.id);
+      break;
+    case 'edit':
+      await openEditRoute(state.route.id);
+      break;
+    default:
+      state.reader = null;
+      renderFeed();
+      if (!state.loaded) await loadStories();
+  }
+}
+const safeRoute = () => onRoute().catch((err) => { console.error(err); toast(friendlyError(err), 'error'); });
+window.addEventListener('hashchange', safeRoute);
+
+/* ------------------------------------------------------------------ shared layout */
+function topBar(right = '') {
+  return `
+    <header class="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur">
+      <div class="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
+        <a href="#/" class="flex items-center gap-2 font-black tracking-tight">
+          <span class="grid h-8 w-8 place-items-center rounded-lg bg-brand-400 text-base text-zinc-950">😂</span>
+          <span class="text-lg">Roast<span class="text-brand-400">Pages</span></span>
+        </a>
+        <div class="flex items-center gap-2">${right}</div>
+      </div>
+    </header>`;
+}
+
+function renderSetupScreen() {
+  app.innerHTML = `
+    ${topBar()}
+    <main class="mx-auto max-w-2xl px-4 py-16">
+      <div class="card p-8">
+        <h1 class="text-2xl font-black">One more step: connect Supabase</h1>
+        <p class="mt-3 text-zinc-500">Open <code class="rounded bg-zinc-100 px-1.5 py-0.5 text-brand-600">index.html</code> and paste your project credentials into the two constants at the top of the <code class="rounded bg-zinc-100 px-1.5 py-0.5 text-brand-600">&lt;script&gt;</code> block:</p>
+        <pre class="mt-4 overflow-x-auto rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">const SUPABASE_URL      = 'https://xxxxxxxxxxxx.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOi...';</pre>
+        <p class="mt-4 text-sm text-zinc-500">Then run <code class="text-zinc-700">supabase-setup.sql</code> in the Supabase SQL Editor. Full instructions are in <code class="text-zinc-700">README.md</code>.</p>
+      </div>
+    </main>`;
+}
+
+/* ==================================================================================
+   FEED
+   ================================================================================== */
+async function loadStories() {
+  const { data, error } = await db.from('stories').select('*').order('created_at', { ascending: false });
+  if (error) { state.loadError = friendlyError(error); toast(state.loadError, 'error'); }
+  else { state.stories = data; state.loadError = null; }
+  state.loaded = true;
+  if (state.route.name === 'feed') renderFeed();
+}
+
+function sortedStories() {
+  const list = [...state.stories];
+  if (state.sort === 'funniest') list.sort((a, b) => b.laughs - a.laughs || new Date(b.created_at) - new Date(a.created_at));
+  else list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  return list;
+}
+
+function storyCard(s) {
+  const papers = Array.isArray(s.papers) ? s.papers : [];
+  const imgs = imageCount(papers);
+  return `
+    <article class="card flex animate-fade-up flex-col overflow-hidden transition hover:border-zinc-300">
+      <a href="#/story/${esc(s.id)}" class="group flex-1 p-5">
+        <h3 class="line-clamp-2 text-lg font-bold leading-snug group-hover:text-brand-600">${esc(s.title)}</h3>
+        <p class="mt-1 text-sm text-zinc-500">by <span class="font-medium text-zinc-800">${esc(s.author)}</span></p>
+        <div class="mt-4 flex flex-wrap gap-2 text-xs text-zinc-500">
+          <span class="pill">📄 ${plural(papers.length, 'paper')}</span>
+          ${imgs ? `<span class="pill">🖼️ ${plural(imgs, 'image')}</span>` : ''}
+          <span class="pill" title="${esc(new Date(s.created_at).toLocaleString())}">🕒 ${esc(timeAgo(s.created_at))}</span>
+        </div>
+      </a>
+      <div class="flex items-center justify-between border-t border-zinc-200 px-4 py-3">
+        <button class="laugh-btn" data-action="laugh" data-id="${esc(s.id)}" title="Laugh at this story">
+          <span class="text-lg leading-none" data-laugh-emoji>😂</span>
+          <span data-laughs-for="${esc(s.id)}">${s.laughs}</span>
+          <span class="text-zinc-500">Laugh</span>
+        </button>
+        <a href="#/story/${esc(s.id)}" class="btn-secondary !py-1.5">Read →</a>
+      </div>
+    </article>`;
+}
+
+function renderFeed() {
+  const list = sortedStories();
+  const skeletons = Array.from({ length: 6 }, () => `
+    <div class="card animate-pulse p-5"><div class="h-5 w-3/4 rounded bg-zinc-100"></div><div class="mt-3 h-4 w-1/3 rounded bg-zinc-100"></div><div class="mt-6 flex gap-2"><div class="h-6 w-20 rounded-full bg-zinc-100"></div><div class="h-6 w-24 rounded-full bg-zinc-100"></div></div></div>`).join('');
+
+  let body;
+  if (!state.loaded) body = `<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">${skeletons}</div>`;
+  else if (state.loadError) body = `
+    <div class="card p-10 text-center">
+      <p class="text-4xl">😵</p>
+      <h2 class="mt-3 text-xl font-bold">Couldn't load stories</h2>
+      <p class="mt-2 text-sm text-zinc-500">${esc(state.loadError)}</p>
+      <button class="btn-secondary mt-6" data-action="retry">Try again</button>
+    </div>`;
+  else if (!list.length) body = `
+    <div class="card p-10 text-center">
+      <p class="text-5xl">🎤</p>
+      <h2 class="mt-4 text-xl font-bold">No stories yet. Painfully quiet.</h2>
+      <p class="mt-2 text-zinc-500">Be the first to roast someone — page by page.</p>
+      <a href="#/new" class="btn-primary mt-6">Write the first story</a>
+    </div>`;
+  else body = `<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">${list.map(storyCard).join('')}</div>`;
+
+  app.innerHTML = `
+    ${topBar(`<a href="#/new" class="btn-primary">+ New Story</a>`)}
+    <main class="mx-auto max-w-5xl px-4 py-8">
+      <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 class="text-3xl font-black tracking-tight sm:text-4xl">Fresh roasts 🔥</h1>
+          <p class="mt-1 text-zinc-500">Page-by-page comedy with surprise image reveals. Read slowly for maximum damage.</p>
+        </div>
+        <div class="inline-flex rounded-xl border border-zinc-200 bg-white p-1 text-sm">
+          <button class="rounded-lg px-3 py-1.5 font-medium ${state.sort === 'newest' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-900'}" data-action="sort" data-sort="newest">Newest</button>
+          <button class="rounded-lg px-3 py-1.5 font-medium ${state.sort === 'funniest' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-900'}" data-action="sort" data-sort="funniest">Funniest</button>
+        </div>
+      </div>
+      ${body}
+    </main>
+    <footer class="px-4 pb-10 text-center text-xs text-zinc-400">Made with friends, Supabase and questionable judgement.</footer>`;
+}
+
+/* ------------------------------------------------------------------ laughs */
+function setLaughs(id, n) {
+  const s = state.stories.find((x) => x.id === id);
+  if (s) s.laughs = n;
+  if (state.reader?.story.id === id) state.reader.story.laughs = n;
+  document.querySelectorAll(`[data-laughs-for="${CSS.escape(id)}"]`).forEach((el) => (el.textContent = n));
+}
+
+async function laugh(id, btn) {
+  const current = state.stories.find((x) => x.id === id)?.laughs ?? state.reader?.story.laughs ?? 0;
+  setLaughs(id, current + 1);                              // optimistic update
+  const emoji = btn?.querySelector('[data-laugh-emoji]');
+  if (emoji) { emoji.classList.remove('animate-pop'); void emoji.offsetWidth; emoji.classList.add('animate-pop'); }
+  const { data, error } = await db.rpc('laugh_at_story', { p_id: id });
+  if (error) { setLaughs(id, current); toast(friendlyError(error), 'error'); return; }
+  if (typeof data === 'number') setLaughs(id, data);
+}
+
+/* ------------------------------------------------------------------ realtime */
+function subscribeRealtime() {
+  db.channel('public:stories')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'stories' }, ({ new: row }) => {
+      const s = state.stories.find((x) => x.id === row.id);
+      if (s) Object.assign(s, row);
+      if (state.reader?.story.id === row.id) {
+        Object.assign(state.reader.story, row);
+        state.reader.index = Math.min(state.reader.index, row.papers.length - 1);
+      }
+      setLaughs(row.id, row.laughs);
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stories' }, ({ new: row }) => {
+      if (state.stories.some((x) => x.id === row.id)) return;
+      state.stories.unshift(row);
+      if (state.route.name === 'feed') renderFeed();
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'stories' }, ({ old }) => {
+      state.stories = state.stories.filter((x) => x.id !== old.id);
+      if (state.route.name === 'feed') renderFeed();
+      else if (state.reader?.story.id === old.id) { toast('This story was just deleted by its author.'); location.hash = '#/'; }
+    })
+    .subscribe();
+}
+
+/* ==================================================================================
+   EDITOR
+   ================================================================================== */
+function newPaper(type) {
+  return type === 'image'
+    ? { uid: uid(), type: 'image', url: '', caption: '', file: null, preview: '' }
+    : { uid: uid(), type: 'text', text: '' };
+}
+
+function startNewStory() {
+  state.editor = {
+    id: randomUUID(),
+    isEdit: false,
+    title: '',
+    author: localStorage.getItem('rp_author') || '',
+    papers: [newPaper('text')],
+    passwordHash: null,
+  };
+}
+
+function paperCardHtml(p, i, total) {
+  const typeLabel = p.type === 'image' ? '🖼️ Image Paper' : '📝 Text Paper';
+  const controls = `
+    <div class="flex items-center gap-0.5">
+      <button class="icon-btn" data-action="move" data-dir="-1" data-uid="${p.uid}" title="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
+      <button class="icon-btn" data-action="move" data-dir="1" data-uid="${p.uid}" title="Move down" ${i === total - 1 ? 'disabled' : ''}>↓</button>
+      <button class="icon-btn hover:!bg-red-50 hover:!text-red-600" data-action="delete" data-uid="${p.uid}" title="Delete paper">🗑️</button>
+    </div>`;
+
+  let body;
+  if (p.type === 'text') {
+    body = `
+      <textarea class="input min-h-[96px] resize-y text-lg" rows="3" maxlength="${LIMITS.TEXT}" placeholder="Set up the joke… (max ${LIMITS.TEXT} characters)" data-field="text" data-uid="${p.uid}">${esc(p.text)}</textarea>
+      <div class="mt-1.5 text-right text-xs ${p.text.length >= LIMITS.TEXT ? 'text-red-600' : 'text-zinc-500'}"><span data-counter="text-${p.uid}">${p.text.length}</span>/${LIMITS.TEXT}</div>`;
+  } else {
+    const src = p.preview || p.url;
+    body = `
+      <input type="file" accept="image/*" class="sr-only" id="file-${p.uid}" data-field="file" data-uid="${p.uid}" />
+      ${src ? `
+        <div class="relative overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50">
+          <img src="${esc(src)}" alt="" class="mx-auto max-h-96 w-auto object-contain" />
+          <label for="file-${p.uid}" class="btn-secondary absolute bottom-3 right-3 cursor-pointer !py-1.5 text-xs">Replace image</label>
+        </div>` : `
+        <label for="file-${p.uid}" class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-4 py-10 text-center transition hover:border-brand-400/60 hover:bg-brand-400/10">
+          <span class="text-3xl">📷</span>
+          <span class="font-semibold">Choose an image</span>
+          <span class="text-xs text-zinc-500">JPG, PNG, GIF or WebP · auto-compressed before upload</span>
+        </label>`}
+      <input class="input mt-3" type="text" maxlength="${LIMITS.CAPTION}" placeholder="Optional caption shown under the image…" value="${esc(p.caption)}" data-field="caption" data-uid="${p.uid}" />
+      <div class="mt-1.5 text-right text-xs ${p.caption.length >= LIMITS.CAPTION ? 'text-red-600' : 'text-zinc-500'}"><span data-counter="caption-${p.uid}">${p.caption.length}</span>/${LIMITS.CAPTION}</div>`;
+  }
+
+  return `
+    <article class="card animate-fade-up p-4 sm:p-5" data-paper="${p.uid}">
+      <header class="mb-3 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="grid h-7 w-7 place-items-center rounded-full bg-zinc-100 text-xs font-bold text-zinc-700">${i + 1}</span>
+          <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">${typeLabel}</span>
+        </div>
+        ${controls}
+      </header>
+      ${body}
+    </article>`;
+}
+
+function insertBarHtml(index, canAddPaper, canAddImage) {
+  return `
+    <div class="flex items-center gap-2 py-1.5">
+      <div class="h-px flex-1 bg-zinc-100"></div>
+      <button class="btn-ghost !rounded-full !px-3 !py-1 text-xs" data-action="add" data-type="text" data-index="${index}" ${canAddPaper ? '' : 'disabled'} title="${canAddPaper ? 'Insert a text paper here' : `Limit of ${LIMITS.PAPERS} papers reached`}">+ Text</button>
+      <button class="btn-ghost !rounded-full !px-3 !py-1 text-xs" data-action="add" data-type="image" data-index="${index}" ${canAddImage ? '' : 'disabled'} title="${canAddImage ? 'Insert an image paper here' : `Limit of ${LIMITS.IMAGES} images reached`}">+ Image</button>
+      <div class="h-px flex-1 bg-zinc-100"></div>
+    </div>`;
+}
+
+function renderPapers() {
+  const ed = state.editor;
+  const total = ed.papers.length;
+  const imgs = imageCount(ed.papers);
+  const canAddPaper = total < LIMITS.PAPERS;
+  const canAddImage = canAddPaper && imgs < LIMITS.IMAGES;
+
+  const counters = $('#editor-counters');
+  if (counters) counters.innerHTML = `
+    <span class="pill ${total >= LIMITS.PAPERS ? '!border-red-300 !text-red-700' : ''}"><span>Total Papers:</span><b>${total}/${LIMITS.PAPERS}</b></span>
+    <span class="pill ${imgs >= LIMITS.IMAGES ? '!border-red-300 !text-red-700' : ''}"><span>Images Used:</span><b>${imgs}/${LIMITS.IMAGES}</b></span>`;
+
+  let html = '';
+  ed.papers.forEach((p, i) => { html += insertBarHtml(i, canAddPaper, canAddImage) + paperCardHtml(p, i, total); });
+  html += insertBarHtml(total, canAddPaper, canAddImage);
+  if (!total) html = `<div class="card border-dashed p-10 text-center text-zinc-500">Your story is empty. Add a paper above to get started.</div>` + html;
+  $('#paper-list').innerHTML = html;
+}
+
+function renderEditor() {
+  const ed = state.editor;
+  app.innerHTML = `
+    <header class="sticky top-0 z-20 border-b border-zinc-200 bg-white/85 backdrop-blur">
+      <div class="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <button class="btn-ghost !px-2" data-action="back">← Back</button>
+        <div id="editor-counters" class="order-3 flex w-full justify-center gap-2 sm:order-none sm:w-auto"></div>
+        <div class="flex items-center gap-2">
+          <button class="btn-ghost text-zinc-500" data-action="discard">${ed.isEdit ? 'Cancel' : 'Discard'}</button>
+          <button class="btn-primary" data-action="publish">${ed.isEdit ? 'Save changes' : 'Publish'}</button>
+        </div>
+      </div>
+    </header>
+    <main class="mx-auto max-w-3xl px-4 pb-24 pt-6">
+      <div class="mb-6">
+        <h1 class="text-2xl font-black tracking-tight sm:text-3xl">${ed.isEdit ? 'Edit story' : 'New story'}</h1>
+        <p class="mt-1 text-sm text-zinc-500">Each paper is one page. Build suspense with text, then land the punchline with an image reveal. Limits: ${LIMITS.PAPERS} papers, ${LIMITS.IMAGES} images, ${LIMITS.TEXT} characters per text paper.</p>
+      </div>
+      <div id="paper-list"></div>
+    </main>`;
+  renderPapers();
+
+  const list = $('#paper-list');
+  const byUid = (id) => ed.papers.find((p) => p.uid === id);
+
+  list.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn || btn.disabled) return;
+    const { action } = btn.dataset;
+    if (action === 'add') {
+      const type = btn.dataset.type;
+      if (ed.papers.length >= LIMITS.PAPERS) return toast(`Maximum ${LIMITS.PAPERS} papers per story.`, 'error');
+      if (type === 'image' && imageCount(ed.papers) >= LIMITS.IMAGES) return toast(`Maximum ${LIMITS.IMAGES} image papers per story.`, 'error');
+      const index = Number(btn.dataset.index);
+      const paper = newPaper(type);
+      ed.papers.splice(index, 0, paper);
+      renderPapers();
+      const el = $(`[data-paper="${paper.uid}"]`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      $('textarea, input[type=text]', el)?.focus();
+    } else if (action === 'delete') {
+      const i = ed.papers.findIndex((p) => p.uid === btn.dataset.uid);
+      if (i < 0) return;
+      if (ed.papers[i].preview?.startsWith('blob:')) URL.revokeObjectURL(ed.papers[i].preview);
+      ed.papers.splice(i, 1);
+      renderPapers();
+    } else if (action === 'move') {
+      const i = ed.papers.findIndex((p) => p.uid === btn.dataset.uid);
+      const j = i + Number(btn.dataset.dir);
+      if (i < 0 || j < 0 || j >= ed.papers.length) return;
+      [ed.papers[i], ed.papers[j]] = [ed.papers[j], ed.papers[i]];
+      renderPapers();
+      $(`[data-paper="${btn.dataset.uid}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+
+  list.addEventListener('input', (e) => {
+    const field = e.target.dataset.field;
+    if (!field || field === 'file') return;
+    const p = byUid(e.target.dataset.uid);
+    if (!p) return;
+    const max = field === 'text' ? LIMITS.TEXT : LIMITS.CAPTION;
+    if (e.target.value.length > max) e.target.value = e.target.value.slice(0, max);
+    p[field] = e.target.value;
+    const counter = $(`[data-counter="${field}-${p.uid}"]`);
+    if (counter) {
+      counter.textContent = e.target.value.length;
+      counter.parentElement.classList.toggle('text-red-600', e.target.value.length >= max);
+      counter.parentElement.classList.toggle('text-zinc-500', e.target.value.length < max);
+    }
+  });
+
+  list.addEventListener('change', (e) => {
+    if (e.target.dataset.field !== 'file') return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return toast('Please choose an image file.', 'error');
+    if (file.size > 15 * 1024 * 1024) return toast('That image is huge (over 15 MB). Pick a smaller one.', 'error');
+    const p = byUid(e.target.dataset.uid);
+    if (!p) return;
+    if (p.preview?.startsWith('blob:')) URL.revokeObjectURL(p.preview);
+    p.file = file;
+    p.preview = URL.createObjectURL(file);
+    p.url = '';
+    renderPapers();
+  });
+
+  app.querySelector('header').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    if (btn.dataset.action === 'back') { location.hash = ed.isEdit ? `#/story/${ed.id}` : '#/'; }
+    else if (btn.dataset.action === 'discard') {
+      const ok = await confirmDialog({ title: ed.isEdit ? 'Cancel editing?' : 'Discard this draft?', text: 'Your unsaved changes will be lost.', cta: ed.isEdit ? 'Cancel editing' : 'Discard', danger: true });
+      if (!ok) return;
+      const target = ed.isEdit ? `#/story/${ed.id}` : '#/';
+      state.editor = null;
+      location.hash = target;
+    }
+    else if (btn.dataset.action === 'publish') openPublishModal();
+  });
+}
+
+function validateEditor() {
+  const ed = state.editor;
+  if (!ed.papers.length) return 'Add at least one paper before publishing.';
+  if (ed.papers.length > LIMITS.PAPERS) return `Maximum ${LIMITS.PAPERS} papers per story.`;
+  if (imageCount(ed.papers) > LIMITS.IMAGES) return `Maximum ${LIMITS.IMAGES} image papers per story.`;
+  for (let i = 0; i < ed.papers.length; i++) {
+    const p = ed.papers[i];
+    if (p.type === 'text' && !p.text.trim()) return `Paper ${i + 1} is an empty text paper. Write something or delete it.`;
+    if (p.type === 'text' && p.text.length > LIMITS.TEXT) return `Paper ${i + 1} is over ${LIMITS.TEXT} characters.`;
+    if (p.type === 'image' && !p.file && !p.url) return `Paper ${i + 1} has no image yet. Choose one or delete the paper.`;
+    if (p.type === 'image' && p.caption.length > LIMITS.CAPTION) return `Caption on paper ${i + 1} is over ${LIMITS.CAPTION} characters.`;
+  }
+  return null;
+}
+
+function openPublishModal() {
+  const ed = state.editor;
+  const problem = validateEditor();
+  if (problem) return toast(problem, 'error');
+
+  const dialog = openModal(`
+    <h2 class="text-lg font-bold">${ed.isEdit ? 'Save changes' : 'Publish your story'}</h2>
+    <p class="mt-1 text-sm text-zinc-500">${ed.isEdit ? 'Update the title or author, then save.' : 'Give it a title and lock it with a secret password.'}</p>
+    <form class="mt-5 space-y-4" data-form>
+      <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">Title</label>
+        <input class="input" name="title" maxlength="${LIMITS.TITLE}" placeholder="The Legend of Dave's Parking Skills" value="${esc(ed.title)}" required autofocus />
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">Author name</label>
+        <input class="input" name="author" maxlength="${LIMITS.AUTHOR}" placeholder="Your name or nickname" value="${esc(ed.author)}" required />
+      </div>
+      ${ed.isEdit ? '' : `
+      <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">Secret password</label>
+        <input class="input" type="password" name="password" minlength="${LIMITS.PASSWORD_MIN}" placeholder="At least ${LIMITS.PASSWORD_MIN} characters" autocomplete="new-password" required />
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">Confirm password</label>
+        <input class="input" type="password" name="confirm" placeholder="Type it again" autocomplete="new-password" required />
+        <p class="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">⚠️ No recovery. Only the SHA-256 hash is stored — if you forget this password, the story can never be edited or deleted.</p>
+      </div>`}
+      <p class="hidden text-sm text-red-700" data-error></p>
+      <div class="flex justify-end gap-2 pt-1">
+        <button type="button" class="btn-ghost" data-cancel>Cancel</button>
+        <button type="submit" class="btn-primary" data-submit>${ed.isEdit ? 'Save changes' : 'Publish 🚀'}</button>
+      </div>
+    </form>`);
+
+  const form = $('[data-form]', dialog);
+  const errorEl = $('[data-error]', dialog);
+  const submitBtn = $('[data-submit]', dialog);
+  $('[data-cancel]', dialog).addEventListener('click', closeModal);
+  form.addEventListener('input', () => errorEl.classList.add('hidden'));
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const title = String(fd.get('title') || '').trim();
+    const author = String(fd.get('author') || '').trim();
+    const password = String(fd.get('password') || '');
+    const confirm = String(fd.get('confirm') || '');
+    ed.title = title; ed.author = author;
+
+    const fail = (msg) => { errorEl.textContent = msg; errorEl.classList.remove('hidden'); };
+    if (!title) return fail('Title is required.');
+    if (!author) return fail('Author name is required.');
+    if (!ed.isEdit) {
+      if (password.length < LIMITS.PASSWORD_MIN) return fail(`Password must be at least ${LIMITS.PASSWORD_MIN} characters.`);
+      if (password !== confirm) return fail('Passwords do not match.');
+    }
+
+    submitBtn.disabled = true;
+    form.querySelectorAll('input').forEach((i) => (i.disabled = true));
+    try {
+      await publishStory({ title, author, password }, (msg) => (submitBtn.textContent = msg));
+    } catch (err) {
+      console.error(err);
+      fail(friendlyError(err));
+      submitBtn.disabled = false;
+      submitBtn.textContent = ed.isEdit ? 'Save changes' : 'Publish 🚀';
+      form.querySelectorAll('input').forEach((i) => (i.disabled = false));
+    }
+  });
+}
+
+/** Shrink + re-encode an image in the browser so uploads stay small. Animated GIFs are kept as-is. */
+async function compressImage(file) {
+  if (file.type === 'image/gif' && file.size < 3 * 1024 * 1024) return file;
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const scale = Math.min(1, IMAGE_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';                              // transparent areas become white, matching the theme
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', IMAGE_QUALITY));
+    return blob && blob.size < file.size ? blob : file;
+  } catch (err) {
+    console.warn('Image compression failed, uploading original', err);
+    return file;
+  }
+}
+
+async function uploadPendingImages(storyId, papers, onProgress) {
+  const pending = papers.filter((p) => p.type === 'image' && p.file);
+  for (let i = 0; i < pending.length; i++) {
+    const p = pending[i];
+    onProgress?.(`Uploading image ${i + 1}/${pending.length}…`);
+    const blob = await compressImage(p.file);
+    const ext = blob.type === 'image/gif' ? 'gif' : blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg';
+    const path = `${storyId}/${randomUUID()}.${ext}`;
+    const { error } = await db.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || 'image/jpeg', cacheControl: '31536000', upsert: false });
+    if (error) throw error;
+    p.url = db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+    p.file = null;                                            // already uploaded → a retry won't upload twice
+  }
+}
+
+function serializePapers(papers) {
+  return papers.map((p) => p.type === 'image'
+    ? { type: 'image', url: p.url, caption: p.caption.trim().slice(0, LIMITS.CAPTION) }
+    : { type: 'text', text: p.text.trim().slice(0, LIMITS.TEXT) });
+}
+
+async function publishStory({ title, author, password }, onProgress) {
+  const ed = state.editor;
+  await uploadPendingImages(ed.id, ed.papers, onProgress);
+  const papers = serializePapers(ed.papers);
+  onProgress?.(ed.isEdit ? 'Saving…' : 'Publishing…');
+
+  if (ed.isEdit) {
+    const { data: ok, error } = await db.rpc('update_story', { p_id: ed.id, p_password_hash: ed.passwordHash, p_title: title, p_author: author, p_papers: papers });
+    if (error) throw error;
+    if (!ok) throw new Error('Wrong password — the story was not changed.');
+    const s = state.stories.find((x) => x.id === ed.id);
+    if (s) Object.assign(s, { title, author, papers, updated_at: new Date().toISOString() });
+    if (state.reader?.story.id === ed.id) Object.assign(state.reader.story, { title, author, papers });
+  } else {
+    const passwordHash = await hashPassword(ed.id, password);
+    const { data, error } = await db.rpc('create_story', { p_id: ed.id, p_title: title, p_author: author, p_papers: papers, p_password_hash: passwordHash });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (row && !state.stories.some((x) => x.id === row.id)) state.stories.unshift(row);
+  }
+
+  localStorage.setItem('rp_author', author);
+  ed.papers.forEach((p) => { if (p.preview?.startsWith('blob:')) URL.revokeObjectURL(p.preview); });
+  const id = ed.id;
+  state.editor = null;
+  closeModal();
+  toast(ed.isEdit ? 'Changes saved!' : 'Published! Go make someone cry-laugh.', 'success');
+  location.hash = `#/story/${id}`;
+}
+
+/* ------------------------------------------------------------------ edit / delete (password protected) */
+async function fetchStory(id) {
+  const cached = state.stories.find((s) => s.id === id);
+  if (cached) return cached;
+  const { data, error } = await db.from('stories').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  if (data && !state.stories.some((s) => s.id === data.id)) state.stories.push(data);
+  return data;
+}
+
+async function requestEdit(story) {
+  const password = await promptPassword({ title: 'Edit story', text: `Enter the secret password you set when publishing "${story.title}".`, cta: 'Unlock editor' });
+  if (password === null) return false;
+  const hash = await hashPassword(story.id, password);
+  const { data: ok, error } = await db.rpc('verify_story_password', { p_id: story.id, p_password_hash: hash });
+  if (error) { toast(friendlyError(error), 'error'); return false; }
+  if (!ok) { toast('Wrong password. There is no recovery — sorry!', 'error'); return false; }
+  state.editor = {
+    id: story.id,
+    isEdit: true,
+    title: story.title,
+    author: story.author,
+    passwordHash: hash,
+    papers: story.papers.map((p) => p.type === 'image'
+      ? { uid: uid(), type: 'image', url: p.url, caption: p.caption || '', file: null, preview: '' }
+      : { uid: uid(), type: 'text', text: p.text || '' }),
+  };
+  location.hash = `#/edit/${story.id}`;
+  return true;
+}
+
+async function requestDelete(story) {
+  const password = await promptPassword({ title: 'Delete story', text: `This permanently deletes "${story.title}". Enter the secret password to confirm.`, cta: 'Delete forever', danger: true });
+  if (password === null) return;
+  const hash = await hashPassword(story.id, password);
+  const { data: ok, error } = await db.rpc('delete_story', { p_id: story.id, p_password_hash: hash });
+  if (error) return toast(friendlyError(error), 'error');
+  if (!ok) return toast('Wrong password. The story was not deleted.', 'error');
+  state.stories = state.stories.filter((s) => s.id !== story.id);
+  state.reader = null;
+  toast('Story deleted.', 'success');
+  location.hash = '#/';
+}
+
+async function openEditRoute(id) {
+  if (state.editor?.isEdit && state.editor.id === id && state.editor.passwordHash) return renderEditor();
+  renderLoading();
+  try {
+    const story = await fetchStory(id);
+    if (!story) return renderNotFound();
+    const unlocked = await requestEdit(story);          // navigates to #/edit/<id> itself on success
+    if (!unlocked) location.hash = `#/story/${id}`;
+  } catch (err) { toast(friendlyError(err), 'error'); location.hash = '#/'; }
+}
+
+/* ==================================================================================
+   READER
+   ================================================================================== */
+function renderLoading() {
+  app.innerHTML = `${topBar()}<div class="grid min-h-[60vh] place-items-center text-zinc-500"><div class="animate-pulse text-lg">Loading…</div></div>`;
+}
+function renderNotFound() {
+  app.innerHTML = `${topBar()}
+    <main class="mx-auto max-w-xl px-4 py-20 text-center">
+      <p class="text-5xl">🫥</p>
+      <h1 class="mt-4 text-2xl font-black">Story not found</h1>
+      <p class="mt-2 text-zinc-500">It may have been deleted by its author. The roast lives on in our hearts.</p>
+      <a href="#/" class="btn-primary mt-6">Back to the feed</a>
+    </main>`;
+}
+
+async function openReader(id) {
+  if (state.reader?.story.id !== id) {
+    renderLoading();
+    try {
+      const story = await fetchStory(id);
+      if (!story) return renderNotFound();
+      state.reader = { story, index: 0 };
+    } catch (err) { toast(friendlyError(err), 'error'); return renderNotFound(); }
+  }
+  renderReader();
+}
+
+function renderReader() {
+  const { story, index } = state.reader;
+  const papers = story.papers;
+  const n = papers.length;
+  const p = papers[index];
+  const isLast = index === n - 1;
+  const next = papers[index + 1];
+  if (next?.type === 'image' && next.url) { const img = new Image(); img.src = next.url; }   // preload the next reveal
+
+  // The reader is full-bleed: slim header (52px) + single-row footer (76px) + small paddings
+  // (~32px) are all that is reserved, so the image gets nearly the whole screen height.
+  // `width:auto` keeps the aspect ratio, so the <figure> (w-fit) hugs the picture like a
+  // slightly larger sheet of paper.
+  const reserved = 160 + (p.caption ? 56 : 0);
+  const slide = p.type === 'image' ? `
+      <figure class="card mx-auto w-fit max-w-full p-1.5 sm:p-2.5">
+        <img src="${esc(p.url)}" alt="" class="block h-auto w-auto max-w-full rounded-lg animate-reveal" style="max-height:max(260px, calc(100dvh - ${reserved}px))" />
+        ${p.caption ? `<figcaption class="mx-auto max-w-2xl px-2 pb-1 pt-2.5 text-center text-lg font-medium leading-snug text-zinc-800 sm:text-xl">${esc(p.caption)}</figcaption>` : ''}
+      </figure>` : `
+      <div class="card mx-auto max-w-3xl px-6 py-16 text-center sm:px-12 sm:py-24">
+        <p class="break-words text-2xl font-bold leading-snug sm:text-4xl">${esc(p.text)}</p>
+      </div>`;
+
+  const footerCenter = `
+      <div class="flex min-w-0 flex-col items-center gap-1 sm:flex-row sm:gap-3">
+        <div class="whitespace-nowrap text-sm font-semibold text-zinc-700">Page ${index + 1} <span class="text-zinc-500">of</span> ${n}</div>
+        ${isLast ? `
+        <button class="laugh-btn !px-3 !py-1 animate-fade-up" data-action="laugh" data-id="${esc(story.id)}" title="That's the end — did it get you?">
+          <span class="text-lg leading-none" data-laugh-emoji>😂</span> <span class="hidden sm:inline">The end — did it get you?</span><span class="sm:hidden">Laugh</span>
+          <span class="text-zinc-500">(<span data-laughs-for="${esc(story.id)}">${story.laughs}</span>)</span>
+        </button>` : ''}
+      </div>`;
+
+  app.innerHTML = `
+    <div class="flex h-dvh flex-col">
+      <header class="shrink-0 border-b border-zinc-200 bg-white/85 backdrop-blur">
+        <div class="mx-auto flex h-[52px] max-w-6xl items-center gap-2 px-3 sm:px-4">
+          <a href="#/" class="btn-ghost !px-2.5 !py-1.5" title="Back to feed">← <span class="hidden sm:inline">Feed</span></a>
+          <div class="min-w-0 flex-1 text-center leading-tight">
+            <h1 class="truncate text-sm font-bold sm:text-base">${esc(story.title)}</h1>
+            <p class="truncate text-[11px] text-zinc-500">by ${esc(story.author)} · ${esc(timeAgo(story.created_at))}</p>
+          </div>
+          <button class="laugh-btn !py-1" data-action="laugh" data-id="${esc(story.id)}" title="Laugh at this story">
+            <span class="text-lg leading-none" data-laugh-emoji>😂</span>
+            <span data-laughs-for="${esc(story.id)}">${story.laughs}</span>
+          </button>
+          <button class="icon-btn" data-action="story-menu" title="More">⋯</button>
+        </div>
+      </header>
+
+      <main class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-2 py-3 sm:px-4 sm:py-4">
+        <div class="w-full max-w-6xl animate-fade-up" data-slide="${index}">
+          ${slide}
+        </div>
+      </main>
+
+      <footer class="shrink-0 border-t border-zinc-200 bg-white/85 px-3 pt-2.5 backdrop-blur sm:px-4" style="padding-bottom:max(0.625rem, env(safe-area-inset-bottom))">
+        <div class="mx-auto max-w-3xl">
+          <div class="flex items-center justify-between gap-3">
+            <button class="btn-secondary !py-2" data-action="prev" ${index === 0 ? 'disabled' : ''}>← <span class="hidden sm:inline">Previous</span> Page</button>
+            ${footerCenter}
+            <button class="btn-primary !py-2" data-action="next" ${isLast ? 'disabled' : ''}><span class="hidden sm:inline">Next</span> Page →</button>
+          </div>
+          <div class="mt-2 h-1 overflow-hidden rounded-full bg-zinc-200">
+            <div class="h-full rounded-full bg-brand-400 transition-all duration-300" style="width:${((index + 1) / n) * 100}%"></div>
+          </div>
+        </div>
+      </footer>
+    </div>`;
+}
+
+function goToPage(delta) {
+  if (!state.reader) return;
+  const n = state.reader.story.papers.length;
+  const next = Math.min(n - 1, Math.max(0, state.reader.index + delta));
+  if (next === state.reader.index) return;
+  state.reader.index = next;
+  renderReader();
+}
+
+function openStoryMenu(story) {
+  const dialog = openModal(`
+    <h2 class="truncate text-lg font-bold">${esc(story.title)}</h2>
+    <p class="mt-1 text-sm text-zinc-500">by ${esc(story.author)}</p>
+    <div class="mt-5 grid gap-2">
+      <button class="btn-secondary justify-start" data-menu="copy">🔗 Copy link</button>
+      <button class="btn-secondary justify-start" data-menu="edit">✏️ Edit story <span class="ml-auto text-xs text-zinc-500">password</span></button>
+      <button class="btn-danger justify-start" data-menu="delete">🗑️ Delete story <span class="ml-auto text-xs text-red-600/70">password</span></button>
+    </div>`);
+  dialog.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-menu]');
+    if (!btn) return;
+    closeModal();
+    if (btn.dataset.menu === 'copy') {
+      try { await navigator.clipboard.writeText(`${location.origin}${location.pathname}#/story/${story.id}`); toast('Link copied!', 'success'); }
+      catch { toast('Could not copy — copy the address bar instead.', 'error'); }
+    } else if (btn.dataset.menu === 'edit') await requestEdit(story);
+    else if (btn.dataset.menu === 'delete') await requestDelete(story);
+  });
+}
+
+/* ------------------------------------------------------------------ global event delegation */
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const { action } = btn.dataset;
+  if (action === 'laugh') laugh(btn.dataset.id, btn);
+  else if (action === 'sort') { state.sort = btn.dataset.sort; localStorage.setItem('rp_sort', state.sort); renderFeed(); }
+  else if (action === 'retry') { state.loaded = false; renderFeed(); loadStories(); }
+  else if (action === 'prev') goToPage(-1);
+  else if (action === 'next') goToPage(1);
+  else if (action === 'story-menu' && state.reader) openStoryMenu(state.reader.story);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (state.route.name !== 'story' || $('#modal-root').children.length) return;
+  if (['ArrowRight', ' ', 'Enter'].includes(e.key) && !e.target.closest('button, a, input, textarea')) { e.preventDefault(); goToPage(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); goToPage(-1); }
+});
+
+// Swipe left/right in the reader on touch devices
+let touchStartX = null;
+document.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+document.addEventListener('touchend', (e) => {
+  if (touchStartX === null || state.route.name !== 'story') return;
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  touchStartX = null;
+  if (Math.abs(dx) > 60) goToPage(dx < 0 ? 1 : -1);
+}, { passive: true });
+
+// Warn before leaving the page with an unpublished draft
+window.addEventListener('beforeunload', (e) => {
+  if (state.editor && state.editor.papers.some((p) => (p.type === 'text' && p.text.trim()) || (p.type === 'image' && (p.file || p.url)))) e.preventDefault();
+});
+
+/* ------------------------------------------------------------------ boot */
+if (CONFIGURED) subscribeRealtime();
+safeRoute();
+</script>
+</body>
+</html>
